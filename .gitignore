@@ -1,0 +1,30 @@
+# Python
+.venv/
+venv/
+ENV/
+env/
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+
+# Logs
+*.log
+*.log.*
+nohup.out
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+
+# IDEs
+.idea/
+.vscode/
+*.swp
+*~
+
+# Large PDF documents (>100MB exceeds GitHub push limit)
+*.pdf

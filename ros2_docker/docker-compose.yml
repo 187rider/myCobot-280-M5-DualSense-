@@ -1,0 +1,18 @@
+services:
+  mycobot-ros2:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: mycobot-ros2-desktop:humble
+    container_name: mycobot_ros2
+    security_opt:
+      - seccomp:unconfined
+    ports:
+      - "6080:80"   # Access Web VNC desktop at http://localhost:6080
+      - "9998:9998/udp" # DualSense gamepad UDP stream
+    environment:
+      - USER=ubuntu
+      - PASSWORD=ubuntu
+      - RESOLUTION=1920x1080
+    shm_size: "2gb"
+    restart: unless-stopped
