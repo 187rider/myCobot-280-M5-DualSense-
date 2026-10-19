@@ -36,19 +36,38 @@ class MacCameraPublisher(Node):
 
         self.cap = None
         self.last_connect_attempt = 0.0
+        self.notified_waiting = False
 
         timer_period = 1.0 / max(1.0, fps)
         self.timer = self.create_timer(timer_period, self.capture_and_publish)
+
+    def check_server(self):
+        import socket
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.settimeout(0.3)
+            s.connect(("host.docker.internal", 5006))
+            s.close()
+            return True
+        except Exception:
+            return False
 
     def get_capture(self):
         if self.cap is not None and self.cap.isOpened():
             return self.cap
 
         now = time.time()
-        if now - self.last_connect_attempt < 2.0:
+        if now - self.last_connect_attempt < 3.0:
             return None
         self.last_connect_attempt = now
 
+        if not self.check_server():
+            if not self.notified_waiting:
+                self.get_logger().info("[*] Waiting for Mac webcam streamer on host.docker.internal:5006 (Run 'python3 stream_camera.py' on Mac)...")
+                self.notified_waiting = True
+            return None
+
+        self.notified_waiting = False
         try:
             self.cap = cv2.VideoCapture(self.stream_url)
             if self.cap.isOpened():
@@ -57,7 +76,7 @@ class MacCameraPublisher(Node):
             else:
                 self.cap = None
                 return None
-        except Exception as e:
+        except Exception:
             self.cap = None
             return None
 
