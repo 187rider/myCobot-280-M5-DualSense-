@@ -76,7 +76,24 @@ ros2 launch mycobot_280 teleop_dualsense.launch.py port:=/dev/ttyUSB0 baud:=1152
 
 ---
 
-### Mode B: Direct Host-Only Python Control (No Docker / No ROS)
+### Mode B: Stream Mac Web Cam to ROS 2
+
+Stream your Mac's FaceTime HD Camera, Continuity Camera (iPhone), or external USB webcam into ROS 2 topics (`/camera/image_raw`):
+
+1. **Start the Mac Webcam Streamer (on Mac Terminal)**:
+   ```bash
+   cd ros2_docker
+   ../.venv/bin/python stream_camera.py
+   ```
+   *Preview in your browser at [http://localhost:5006](http://localhost:5006).*
+
+2. **View in RViz 2 (Web Desktop http://localhost:6080)**:
+   - In RViz 2: Click **Add** (bottom left) ➔ **By topic** ➔ `/camera/image_raw` ➔ **Image**.
+   - Your Mac webcam stream appears live in RViz alongside the 3D robot model!
+
+---
+
+### Mode C: Direct Host-Only Python Control (No Docker / No ROS)
 
 For quick testing or lightweight headless scripting directly on macOS:
 ```bash

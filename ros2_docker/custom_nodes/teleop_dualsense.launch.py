@@ -4,6 +4,7 @@ from launch_ros.actions import Node
 from launch_ros.parameter_descriptions import ParameterValue
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
+from launch.conditions import IfCondition
 from launch.substitutions import Command, LaunchConfiguration
 
 def generate_launch_description():
@@ -79,5 +80,21 @@ def generate_launch_description():
         output="screen"
     )
     res.append(teleop_dualsense_node)
+
+    camera_launch_arg = DeclareLaunchArgument(
+        name="camera",
+        default_value="true",
+        description="Whether to run the Mac camera publisher"
+    )
+    res.append(camera_launch_arg)
+
+    camera_node = Node(
+        package="mycobot_280",
+        executable="camera_publisher",
+        name="mac_camera_publisher",
+        output="screen",
+        condition=IfCondition(LaunchConfiguration("camera"))
+    )
+    res.append(camera_node)
 
     return LaunchDescription(res)
