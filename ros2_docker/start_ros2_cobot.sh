@@ -8,7 +8,24 @@ echo "=========================================================="
 echo "      myCobot 280 M5 - ROS2 Humble Docker Launcher"
 echo "=========================================================="
 
-# 1. Start Docker Container if not running
+# 1. Ensure Docker Desktop is running
+if ! docker info >/dev/null 2>&1; then
+    echo "[!] Docker Desktop is not running."
+    if [ -d "/Applications/Docker.app" ]; then
+        echo "[+] Launching Docker Desktop..."
+        open -a Docker
+        echo "[*] Waiting for Docker daemon to initialize..."
+        while ! docker info >/dev/null 2>&1; do
+            sleep 2
+        done
+        echo "[+] Docker Desktop is ready."
+    else
+        echo "[-] Docker is not installed or running. Please start Docker and retry."
+        exit 1
+    fi
+fi
+
+# 2. Start Docker Container if not running
 if ! docker compose ps --services --filter "status=running" | grep -q "mycobot-ros2"; then
     echo "[+] Starting ROS2 Docker container..."
     docker compose up -d
