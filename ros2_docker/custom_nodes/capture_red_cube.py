@@ -249,7 +249,6 @@ class CaptureRedCubeNode(Node):
     # ---------------------------------------------------------
     def pixel_to_workspace(self, cx, cy):
         ref_px = self.calib.get("ref_pixel", [320.0, 240.0])
-        ref_robot = self.calib.get("ref_robot", [170.0, 0.0])
         scale_x = float(self.calib.get("scale_x", 0.25))
         scale_y = float(self.calib.get("scale_y", -0.25))
 
@@ -259,8 +258,9 @@ class CaptureRedCubeNode(Node):
         # Invert lateral Y tracking direction when invert_y is enabled
         y_sign = -1.0 if self.invert_y else 1.0
 
-        robot_x = ref_robot[0] + dy_px * scale_x
-        robot_y = ref_robot[1] + (dx_px * scale_y * y_sign)
+        # Incremental Eye-in-Hand visual servoing: displacement is relative to current tracked hand position
+        robot_x = self.tracked_x + (dy_px * scale_x)
+        robot_y = self.tracked_y + (dx_px * scale_y * y_sign)
         return robot_x, robot_y
 
     def is_in_safe_workspace(self, x: float, y: float) -> bool:
@@ -434,15 +434,21 @@ class CaptureRedCubeNode(Node):
             if not self.is_in_safe_workspace(target_rx, target_ry):
                 continue
 
-            # Displacement from current hand position
-            delta = math.hypot(target_rx - self.tracked_x, target_ry - self.tracked_y)
+            # Displacement from current tracked hand position
+            err_x = target_rx - self.tracked_x
+            err_y = target_ry - self.tracked_y
+            delta = math.hypot(err_x, err_y)
 
-            # Deadband threshold (6.5mm) filters out camera sensor noise
-            if delta > 6.5:
-                # Exponential low-pass filter (alpha = 0.65) for fluid tracking
-                alpha = 0.65
-                self.tracked_x = alpha * target_rx + (1.0 - alpha) * self.tracked_x
-                self.tracked_y = alpha * target_ry + (1.0 - alpha) * self.tracked_y
+            # Deadband threshold (2.5mm) filters out minor sensor jitter
+            if delta > 2.5:
+                # Proportional visual servoing gain for fluid convergence
+                gain = 0.50
+                self.tracked_x += err_x * gain
+                self.tracked_y += err_y * gain
+
+                # Clamp within safe physical workspace
+                self.tracked_x = max(self.x_min, min(self.x_max, self.tracked_x))
+                self.tracked_y = max(self.y_min, min(self.y_max, self.tracked_y))
 
                 # Stream coordinate update to driver (async non-blocking UART)
                 cmd_coords = [
