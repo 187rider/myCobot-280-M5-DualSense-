@@ -5,7 +5,7 @@ from launch_ros.parameter_descriptions import ParameterValue
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument
 from launch.conditions import IfCondition
-from launch.substitutions import Command, LaunchConfiguration
+from launch.substitutions import Command, LaunchConfiguration, PythonExpression
 
 def generate_launch_description():
     res = []
@@ -23,12 +23,30 @@ def generate_launch_description():
     )
     res.append(baud_launch_arg)
 
+    gripper_launch_arg = DeclareLaunchArgument(
+        name="gripper",
+        default_value="true",
+        description="Whether the robot arm has a claw / adaptive gripper attached"
+    )
+    res.append(gripper_launch_arg)
+
+    default_arm_urdf = os.path.join(
+        get_package_share_directory("mycobot_description"),
+        "urdf/mycobot_280_m5/mycobot_280_m5.urdf"
+    )
+    gripper_arm_urdf = os.path.join(
+        get_package_share_directory("mycobot_description"),
+        "urdf/mycobot_280_m5/mycobot_280_m5_adaptive_gripper.urdf"
+    )
+
+    model_path = PythonExpression([
+        f"'{gripper_arm_urdf}' if '", LaunchConfiguration("gripper"), "'.lower() in ['true', '1'] else '{default_arm_urdf}'"
+    ])
+
     model_launch_arg = DeclareLaunchArgument(
-        "model",
-        default_value=os.path.join(
-            get_package_share_directory("mycobot_description"),
-            "urdf/mycobot_280_m5/mycobot_280_m5.urdf"
-        )
+        name="model",
+        default_value=model_path,
+        description="URDF model file to use"
     )
     res.append(model_launch_arg)
 
@@ -96,5 +114,31 @@ def generate_launch_description():
         condition=IfCondition(LaunchConfiguration("camera"))
     )
     res.append(camera_node)
+
+    detect_launch_arg = DeclareLaunchArgument(
+        name="detect",
+        default_value="false",
+        description="Whether to run vision object detection"
+    )
+    res.append(detect_launch_arg)
+
+    mode_launch_arg = DeclareLaunchArgument(
+        name="mode",
+        default_value="ai",
+        description="Vision detection mode: 'ai' (original YOLOv8 80 classes), 'block' (color sorting cubes), 'all' (hybrid)"
+    )
+    res.append(mode_launch_arg)
+
+    detect_node = Node(
+        package="mycobot_280",
+        executable="detect_objects",
+        name="detect_objects",
+        output="screen",
+        parameters=[{
+            "mode": LaunchConfiguration("mode")
+        }],
+        condition=IfCondition(LaunchConfiguration("detect"))
+    )
+    res.append(detect_node)
 
     return LaunchDescription(res)

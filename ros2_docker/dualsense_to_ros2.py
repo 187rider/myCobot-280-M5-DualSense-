@@ -22,15 +22,22 @@ def main():
     pygame.init()
     pygame.joystick.init()
 
-    if pygame.joystick.get_count() == 0:
-        print("[-] No Gamepad detected! Please connect your PS5 DualSense via Bluetooth or USB.")
-        sys.exit(1)
+    while pygame.joystick.get_count() == 0:
+        print("[*] Waiting for PS5 DualSense controller to connect via Bluetooth or USB...")
+        time.sleep(2)
+        pygame.joystick.quit()
+        pygame.joystick.init()
 
     joy = pygame.joystick.Joystick(0)
     print(f"[+] Found Controller: {joy.get_name()}")
 
     server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
     server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    if hasattr(socket, 'SO_REUSEPORT'):
+        try:
+            server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEPORT, 1)
+        except Exception:
+            pass
     server.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
     server.bind((bind_ip, port))
     server.listen(1)
@@ -48,15 +55,18 @@ def main():
     print("\n" + "=" * 60)
     print("      PS5 DualSense ➔ ROS 2 (myCobot 280) Teleoperation")
     print("=" * 60)
-    print("  Left Stick      : J1 (Base) / J2 (Shoulder)  [or X/Y in Coords]")
-    print("  Right Stick     : J3 (Elbow) / J4 (Wrist)    [or Z/Yaw in Coords]")
-    print("  L2 / R2         : J5 (Wrist Roll)            [or Roll]")
-    print("  L1 / R1         : J6 (Flange Roll)           [or Pitch]")
-    print("  Options         : Switch JOINT <-> CARTESIAN Mode")
-    print("  Triangle (▲)    : Go Home [0, 0, 0, 0, 0, 0]")
-    print("  Cross (✖)       : Open Gripper")
-    print("  Circle (🔴)     : Close Gripper")
-    print("  D-Pad Up / Down : Speed +/-")
+    print("  Left Stick       : J1 (Base) / J2 (Shoulder)  [or X/Y in Coords]")
+    print("  Right Stick      : J3 (Elbow) / J4 (Wrist)    [or Z/Yaw in Coords]")
+    print("  L2 / R2          : J5 (Wrist Roll)            [or Roll]")
+    print("  L1 / R1          : J6 (Flange Roll)           [or Pitch]")
+    print("  Options          : Switch JOINT <-> CARTESIAN Mode")
+    print("  Triangle (▲)     : Go Home [0, 0, 0, 0, 0, 0]")
+    print("  Cross (✖)        : Open Gripper")
+    print("  Circle (🔴)      : Close Gripper")
+    print("  L3 Click / Create: 🎯 1-CLICK CAMERA CALIBRATION ([k])")
+    print("  R3 Click         : 📌 Save Fixed Tabletop Pick Spot ([s])")
+    print("  Square (■)       : 🚀 Trigger Color Pick & Place")
+    print("  D-Pad Up / Down  : Speed +/-")
     print("=" * 60 + "\n")
 
     while True:

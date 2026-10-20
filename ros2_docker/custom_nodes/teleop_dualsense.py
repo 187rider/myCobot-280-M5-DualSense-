@@ -1,3 +1,4 @@
+#!/usr/bin/env python3
 import json
 import math
 import socket
@@ -5,7 +6,7 @@ import time
 import rclpy
 from rclpy.node import Node
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Header
+from std_msgs.msg import Header, String, Bool
 from mycobot_interfaces.srv import (
     GetAngles,
     GetCoords,
@@ -61,10 +62,22 @@ class DualSenseTeleopNode(Node):
         self.tcp_buffer = ""
         self.last_connect_try = 0.0
 
+        # Color Pick & Place Integration
+        self.sort_busy = False
+        self.pick_trigger_pub = self.create_publisher(String, "/color_sort/trigger", 10)
+        self.busy_sub = self.create_subscription(Bool, "/color_sort/busy", self.on_sort_busy, 10)
+
         # 30Hz Timer for polling TCP, commanding arm, and publishing RViz TFs
         self.timer = self.create_timer(0.033, self.control_loop)
         self.last_send_time = time.time()
         self.synced = False
+
+    def on_sort_busy(self, msg: Bool):
+        was_busy = self.sort_busy
+        self.sort_busy = msg.data
+        if was_busy and not self.sort_busy:
+            # Pick & place completed -> re-sync controller with current arm angles
+            self.sync_initial_state()
 
     def get_socket(self):
         if self.sock is not None:
@@ -98,9 +111,12 @@ class DualSenseTeleopNode(Node):
             "joint4_to_joint3",
             "joint5_to_joint4",
             "joint6_to_joint5",
-            "joint6output_to_joint6"
+            "joint6output_to_joint6",
+            "gripper_controller"
         ]
-        js.position = [math.radians(float(a)) for a in self.angles]
+        # gripper_controller limit in URDF: -0.74 (close) to 0.15 (open)
+        grip_pos = 0.15 if getattr(self, "gripper_open", True) else -0.74
+        js.position = [math.radians(float(a)) for a in self.angles] + [grip_pos]
         try:
             self.joint_state_pub.publish(js)
         except Exception:
@@ -133,10 +149,16 @@ class DualSenseTeleopNode(Node):
                 pass
 
     def send_angles(self):
+        now = time.time()
         if getattr(self, "sending_angles", False):
-            return
+            # Watchdog: if a service call takes >80ms, force unlock so gamepad never stutters
+            if now - getattr(self, "last_send_angles_time", 0.0) > 0.08:
+                self.sending_angles = False
+            else:
+                return
         if self.set_angles_client.service_is_ready():
             self.sending_angles = True
+            self.last_send_angles_time = now
             req = SetAngles.Request()
             req.joint_1 = float(self.angles[0])
             req.joint_2 = float(self.angles[1])
@@ -151,14 +173,19 @@ class DualSenseTeleopNode(Node):
             future.add_done_callback(on_done)
 
     def send_coords(self):
+        now = time.time()
         if getattr(self, "sending_coords", False):
-            return
+            if now - getattr(self, "last_send_coords_time", 0.0) > 0.08:
+                self.sending_coords = False
+            else:
+                return
         for i, axis in enumerate(["x", "y", "z", "rx", "ry", "rz"]):
             min_l, max_l = COORD_LIMITS[axis]
             self.coords[i] = max(min_l, min(max_l, self.coords[i]))
 
         if self.set_coords_client.service_is_ready():
             self.sending_coords = True
+            self.last_send_coords_time = now
             req = SetCoords.Request()
             req.x = float(self.coords[0])
             req.y = float(self.coords[1])
@@ -174,6 +201,7 @@ class DualSenseTeleopNode(Node):
             future.add_done_callback(on_done)
 
     def set_gripper(self, status):
+        self.gripper_open = status
         if self.set_gripper_client.service_is_ready():
             req = GripperStatus.Request()
             req.status = status
@@ -240,6 +268,27 @@ class DualSenseTeleopNode(Node):
         if just_pressed(1):
             self.set_gripper(False)
 
+        # 2: Square -> Trigger Autonomous Color Pick & Place
+        if just_pressed(2):
+            self.get_logger().info("[*] DualSense Square: Triggering Color Pick & Place!")
+            t_msg = String()
+            t_msg.data = "auto"
+            self.pick_trigger_pub.publish(t_msg)
+
+        # 4: Create/Share or 7: L3 Click -> 1-Click Camera Calibration ([k])
+        if just_pressed(4) or just_pressed(7):
+            self.get_logger().info("[🎯] DualSense (Create / L3): Triggering 1-Click Camera Calibration [k]!")
+            t_msg = String()
+            t_msg.data = "calibrate"
+            self.pick_trigger_pub.publish(t_msg)
+
+        # 8: R3 Click -> Save Fixed Pick Spot ([s])
+        if just_pressed(8):
+            self.get_logger().info("[📌] DualSense (R3): Saving Current Pose as Fixed Tabletop Pick Spot [s]!")
+            t_msg = String()
+            t_msg.data = "fixed"
+            self.pick_trigger_pub.publish(t_msg)
+
         # 6: Options -> Switch Mode
         if just_pressed(6):
             self.mode = "CARTESIAN" if self.mode == "JOINT" else "JOINT"
@@ -254,6 +303,10 @@ class DualSenseTeleopNode(Node):
             self.get_logger().info(f"Speed: {self.speed}%")
 
         self.prev_buttons = {**buttons, "dup": dpad[0], "ddown": dpad[1]}
+
+        # If automated color pick & place is running, pause joystick teleop commands
+        if getattr(self, "sort_busy", False):
+            return
 
         # Analog Stick Motions (Smooth Velocity Integration at ~30Hz)
         now = time.time()

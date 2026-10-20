@@ -1,0 +1,19 @@
+{
+  "calibration_type": "EyesInHand",
+  "tool_center_px": [
+    320.0,
+    240.0
+  ],
+  "camera_offset_mm": 0.0,
+  "scale_x": 0.25,
+  "scale_y": -0.25,
+  "ref_pixel": [
+    320.0,
+    240.0
+  ],
+  "ref_robot": [
+    170.0,
+    0.0
+  ],
+  "grip_z": 95.0
+}

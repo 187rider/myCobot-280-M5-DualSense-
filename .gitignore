@@ -28,3 +28,11 @@ nohup.out
 
 # Large PDF documents (>100MB exceeds GitHub push limit)
 *.pdf
+
+# Model weights (auto-downloaded on first run)
+*.onnx
+ros2_docker/custom_nodes/models/
+
+# Wheel caches
+*.whl
+ros2_docker/wheels/
