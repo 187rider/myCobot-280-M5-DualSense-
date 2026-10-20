@@ -60,14 +60,14 @@ FLANGE_POSTURE = [179.87, -3.78, -62.75]
 
 HAND_RADIUS = 60.0  # mm (gripper tool extension / finger reach)
 
-# Safe physical workspace bounds (increased by hand radius for generous reach)
+# Safe physical workspace bounds (strictly prevents over-extension singularities)
 SAFE_WORKSPACE = {
-    'x_min': 50.0,       # mm (expanded inward toward base)
-    'x_max': 305.0,      # mm (expanded forward: 255 + 50mm hand radius)
-    'y_min': -210.0,     # mm (expanded right span: -150 - 60mm hand radius)
-    'y_max': 210.0,      # mm (expanded left span: +150 + 60mm hand radius)
-    'max_radius': 320.0, # mm (expanded maximum reach radius with hand: 265 + 55mm)
-    'min_radius': 50.0,  # mm
+    'x_min': 80.0,       # mm
+    'x_max': 250.0,      # mm
+    'y_min': -145.0,     # mm
+    'y_max': 145.0,      # mm
+    'max_radius': 260.0, # mm (strict kinematic reach limit - prevents link stretch singularity)
+    'min_radius': 80.0,  # mm
     'z_min': 85.0,       # mm hard table floor limit
     'z_hover': 180.0,    # mm hover tracking height
     'z_lift': 215.0,     # mm holding height after grasp
@@ -84,13 +84,11 @@ class CaptureRedCubeNode(Node):
         self.declare_parameter('grip_z', 95.0)
         self.declare_parameter('auto_capture', False)
         self.declare_parameter('invert_y', True)
-        self.declare_parameter('hand_radius', HAND_RADIUS)
 
         self.speed = int(self.get_parameter('speed').value)
         self.grip_z = float(self.get_parameter('grip_z').value)
         self.auto_capture_enabled = bool(self.get_parameter('auto_capture').value)
         self.invert_y = bool(self.get_parameter('invert_y').value)
-        self.hand_radius = float(self.get_parameter('hand_radius').value)
 
         self.z_hover = SAFE_WORKSPACE['z_hover']
         self.z_lift = SAFE_WORKSPACE['z_lift']
@@ -181,7 +179,7 @@ class CaptureRedCubeNode(Node):
                 except Exception:
                     pass
 
-        for p in [CONFIG_FILE_PATH, HOST_BACKUP_PATH]:
+        for p in [CONFIG_FILE_PATH, HOST_BACKUP_PATH, "/opt/ros2_ws/custom_nodes/custom_positions.json"]:
             if os.path.exists(p):
                 try:
                     with open(p, 'r') as f:
@@ -190,6 +188,46 @@ class CaptureRedCubeNode(Node):
                     break
                 except Exception:
                     pass
+
+    def save_calibration(self):
+        """Persists calibrated anchor to configuration files."""
+        for p in [CONFIG_FILE_PATH, HOST_BACKUP_PATH, "/opt/ros2_ws/custom_nodes/custom_positions.json", "/tmp/custom_positions.json"]:
+            try:
+                os.makedirs(os.path.dirname(p), exist_ok=True)
+                with open(p, 'w') as f:
+                    json.dump(self.calib, f, indent=2)
+                self.get_logger().info(f"[+] Saved calibration to {p}")
+            except Exception:
+                pass
+
+    def calibrate_current_anchor(self):
+        """
+        1-Click Interactive Hand-Eye Anchor Calibration.
+        Binds the red cube's current pixel position to the robot's current physical position.
+        Instantly eliminates any camera lens mount offset or steady-state centering error.
+        """
+        if not self.latest_red_cube or (time.time() - self.latest_red_cube['time'] > 2.5):
+            print("\n[-] Calibration failed: Red Cube is not currently detected in camera view!")
+            print("    Please place the Red Cube on the desk in camera view and try again.\n")
+            return False
+
+        cx, cy = self.latest_red_cube['pixel']
+        coords = self.get_current_coords()
+        rx = coords[0] if coords else self.tracked_x
+        ry = coords[1] if coords else self.tracked_y
+
+        self.calib['ref_pixel'] = [float(cx), float(cy)]
+        self.calib['ref_robot'] = [float(rx), float(ry)]
+        self.save_calibration()
+
+        print("\n" + "=" * 65)
+        print("  🎯 [✓] HAND-EYE ANCHOR CALIBRATED SUCCESSFULLY!")
+        print(f"  • Reference Pixel:   X={cx:.1f}, Y={cy:.1f} px")
+        print(f"  • Reference Robot:   X={rx:.1f}, Y={ry:.1f} mm")
+        print("  • Saved to custom_positions.json")
+        print("  • The arm is now calibrated with ZERO steady-state centering offset!")
+        print("=" * 65 + "\n")
+        return True
 
     # ---------------------------------------------------------
     # Synchronous Driver Service Calls
@@ -217,10 +255,18 @@ class CaptureRedCubeNode(Node):
         req.speed = int(speed)
         return self.call_service_sync(self.set_angles_cli, req)
 
-    def send_coords(self, coords, speed=35, model=1):
+    def send_coords(self, coords, speed=35, model=0):
         x, y, z = coords[0], coords[1], coords[2]
         # Anti-crash table clamp
         z = max(SAFE_WORKSPACE['z_min'], min(SAFE_WORKSPACE['z_lift'] + 20.0, z))
+        # Anti-singularity radial clamp
+        r = math.hypot(x, y)
+        if r > SAFE_WORKSPACE['max_radius']:
+            scale = SAFE_WORKSPACE['max_radius'] / r
+            x *= scale
+            y *= scale
+        x = max(SAFE_WORKSPACE['x_min'], min(SAFE_WORKSPACE['x_max'], x))
+        y = max(SAFE_WORKSPACE['y_min'], min(SAFE_WORKSPACE['y_max'], y))
         req = SetCoords.Request()
         req.x = float(x)
         req.y = float(y)
@@ -249,6 +295,7 @@ class CaptureRedCubeNode(Node):
     # ---------------------------------------------------------
     def pixel_to_workspace(self, cx, cy):
         ref_px = self.calib.get("ref_pixel", [320.0, 240.0])
+        ref_robot = self.calib.get("ref_robot", [170.0, 0.0])
         scale_x = float(self.calib.get("scale_x", 0.25))
         scale_y = float(self.calib.get("scale_y", -0.25))
 
@@ -258,9 +305,8 @@ class CaptureRedCubeNode(Node):
         # Invert lateral Y tracking direction when invert_y is enabled
         y_sign = -1.0 if self.invert_y else 1.0
 
-        # Incremental Eye-in-Hand visual servoing: displacement is relative to current tracked hand position
-        robot_x = self.tracked_x + (dy_px * scale_x)
-        robot_y = self.tracked_y + (dx_px * scale_y * y_sign)
+        robot_x = ref_robot[0] + (dy_px * scale_x)
+        robot_y = ref_robot[1] + (dx_px * scale_y * y_sign)
         return robot_x, robot_y
 
     def is_in_safe_workspace(self, x: float, y: float) -> bool:
@@ -435,22 +481,27 @@ class CaptureRedCubeNode(Node):
                 continue
 
             # Displacement from current tracked hand position
-            err_x = target_rx - self.tracked_x
-            err_y = target_ry - self.tracked_y
-            delta = math.hypot(err_x, err_y)
+            delta = math.hypot(target_rx - self.tracked_x, target_ry - self.tracked_y)
 
-            # Deadband threshold (2.5mm) filters out minor sensor jitter
-            if delta > 2.5:
-                # Proportional visual servoing gain for fluid convergence
-                gain = 0.50
-                self.tracked_x += err_x * gain
-                self.tracked_y += err_y * gain
+            # Deadband threshold (6.5mm) filters out minor sensor jitter
+            if delta > 6.5:
+                # Exponential low-pass filter (alpha = 0.65) for fluid tracking
+                alpha = 0.65
+                new_x = alpha * target_rx + (1.0 - alpha) * self.tracked_x
+                new_y = alpha * target_ry + (1.0 - alpha) * self.tracked_y
 
-                # Clamp within safe physical workspace
-                self.tracked_x = max(self.x_min, min(self.x_max, self.tracked_x))
-                self.tracked_y = max(self.y_min, min(self.y_max, self.tracked_y))
+                # Hardware radius clamp
+                r = math.hypot(new_x, new_y)
+                if r > self.max_radius:
+                    new_x = (new_x / r) * self.max_radius
+                    new_y = (new_y / r) * self.max_radius
+                new_x = max(self.x_min, min(self.x_max, new_x))
+                new_y = max(self.y_min, min(self.y_max, new_y))
 
-                # Stream coordinate update to driver (async non-blocking UART)
+                self.tracked_x = new_x
+                self.tracked_y = new_y
+
+                # Stream coordinate update to driver (model=0 joint space mode prevents wrist spin)
                 cmd_coords = [
                     self.tracked_x,
                     self.tracked_y,
@@ -459,7 +510,7 @@ class CaptureRedCubeNode(Node):
                     FLANGE_POSTURE[1],
                     FLANGE_POSTURE[2]
                 ]
-                self.send_coords(cmd_coords, speed=self.speed, model=1)
+                self.send_coords(cmd_coords, speed=self.speed, model=0)
                 self.still_counter = 0
                 self.tracking_active = True
             else:
@@ -509,14 +560,14 @@ class CaptureRedCubeNode(Node):
             print(f"[2/4] Centering directly over cube at Z={self.z_hover} mm...")
             hover_coords = [target_x, target_y, self.z_hover,
                             FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(hover_coords, speed=30, model=1)
+            self.send_coords(hover_coords, speed=30, model=0)
             time.sleep(0.4)
 
             # 3. Descend straight down to grasp height
             print(f"[3/4] Descending to grasp height Z={self.grip_z} mm...")
             grip_coords = [target_x, target_y, self.grip_z,
                            FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(grip_coords, speed=22, model=1)
+            self.send_coords(grip_coords, speed=22, model=0)
             time.sleep(1.1)
 
             # 4. Clamp & Lift
@@ -526,7 +577,7 @@ class CaptureRedCubeNode(Node):
 
             lift_coords = [target_x, target_y, self.z_lift,
                            FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(lift_coords, speed=25, model=1)
+            self.send_coords(lift_coords, speed=25, model=0)
             time.sleep(1.1)
 
             self.has_cube_grasped = True
@@ -557,7 +608,7 @@ class CaptureRedCubeNode(Node):
             # Descend to table
             put_coords = [rx, ry, self.grip_z,
                           FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(put_coords, speed=20, model=1)
+            self.send_coords(put_coords, speed=20, model=0)
             time.sleep(1.2)
 
             # Open claw to release
@@ -567,7 +618,7 @@ class CaptureRedCubeNode(Node):
             # Elevate back to hover
             up_coords = [rx, ry, self.z_hover,
                          FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(up_coords, speed=25, model=1)
+            self.send_coords(up_coords, speed=25, model=0)
             time.sleep(1.0)
 
             self.has_cube_grasped = False
@@ -592,7 +643,7 @@ class CaptureRedCubeNode(Node):
             target_y = self.latest_red_cube['robot_y'] if self.latest_red_cube else self.tracked_y
             hover = [target_x, target_y, self.z_hover,
                      FLANGE_POSTURE[0], FLANGE_POSTURE[1], FLANGE_POSTURE[2]]
-            self.send_coords(hover, speed=25, model=1)
+            self.send_coords(hover, speed=25, model=0)
             print(f"[✓] Hovering over Red Cube at [X:{target_x:.1f}, Y:{target_y:.1f}, Z:{self.z_hover:.1f}] mm\n")
         finally:
             self.busy = False
@@ -724,6 +775,7 @@ class CaptureRedCubeNode(Node):
         print("   [f]            : 🔄 TOGGLE DYNAMIC FOLLOW (Active / Paused)")
         print("   [a]            : ⚡ TOGGLE AUTO-GRASP (Grasp when stationary)")
         print("   [h]            : 📍 HOVER TEST (Re-center over cube)")
+        print("   [k]            : 🎯 CALIBRATE CAMERA / CLAW ANCHOR (Zero centering error)")
         print("   [i]            : ↔️  TOGGLE Y-AXIS REVERSE (Invert Lateral Polarity)")
         print("   [s]            : 🔍 LIVE VISION & TRACKING STATUS")
         print("   [o]            : 👁️  RETURN TO OBSERVATION STANDBY POSE")
@@ -732,7 +784,7 @@ class CaptureRedCubeNode(Node):
 
         while rclpy.ok():
             try:
-                cmd = input("\n[Cobra Tracker] Command [c/r/f/a/i/h/s/o/q]: ").strip().lower()
+                cmd = input("\n[Cobra Tracker] Command [c/r/f/a/h/k/i/s/o/q]: ").strip().lower()
                 if cmd in ('c', ' ', 'capture'):
                     if self.has_cube_grasped:
                         self.execute_release_to_table()
@@ -748,11 +800,13 @@ class CaptureRedCubeNode(Node):
                     self.auto_capture_enabled = not self.auto_capture_enabled
                     state = "ENABLED (Auto-grasps when cube is still)" if self.auto_capture_enabled else "DISABLED"
                     print(f"[*] Auto-Grasp: {state}")
+                elif cmd in ('h', 'hover'):
+                    self.execute_hover_test()
+                elif cmd in ('k', 'calib', 'calibrate'):
+                    self.calibrate_current_anchor()
                 elif cmd in ('i', 'invert'):
                     self.invert_y = not self.invert_y
                     print(f"[*] Y-Axis Inverted: {self.invert_y}")
-                elif cmd in ('h', 'hover'):
-                    self.execute_hover_test()
                 elif cmd in ('s', 'status', 'diag'):
                     self.print_diagnostics()
                 elif cmd in ('o', 'observe'):

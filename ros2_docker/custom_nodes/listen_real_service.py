@@ -197,6 +197,13 @@ class MyCobotDriver(Node):
             ]
             speed = int(request.speed)
             model = int(request.model)
+            # Hardware safety envelope: prevent kinematic singularity stretch & table crashes
+            r = math.hypot(coords[0], coords[1])
+            if r > 265.0:
+                scale = 265.0 / r
+                coords[0] *= scale
+                coords[1] *= scale
+            coords[2] = max(70.0, coords[2])  # Hard table crash floor
             self.last_cmd_time = time.time()
             # _async=True sends UART command immediately without blocking for reply
             self.mc.send_coords(coords, speed, model, _async=True)

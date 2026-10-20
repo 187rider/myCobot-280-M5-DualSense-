@@ -68,14 +68,14 @@ DEFAULT_BIN_ANGLES = {
     'yellow': [112.93, 3.16, -96.32, 0.87, 0.26, -9.75],    # Custom Place Point 4
 }
 
-# Strict Physical Safe Workspace Envelope for myCobot 280 (Increased by hand radius for generous reach)
+# Strict Physical Safe Workspace Envelope for myCobot 280 (Prevents singularity over-extension)
 SAFE_WORKSPACE = {
-    'x_min': 50.0,       # mm: minimum forward reach (expanded inward toward base)
-    'x_max': 305.0,      # mm: maximum forward reach (expanded forward: 255 + 50mm hand radius)
-    'y_min': -210.0,     # mm: right limit (expanded right span: -150 - 60mm hand radius)
-    'y_max': 210.0,      # mm: left limit (expanded left span: +150 + 60mm hand radius)
-    'max_radius': 320.0, # mm: maximum reach radius sqrt(x^2 + y^2) with hand
-    'min_radius': 50.0,  # mm: minimum radius around base
+    'x_min': 80.0,       # mm: minimum forward reach (clears robot base)
+    'x_max': 250.0,      # mm: maximum forward reach (keeps downward wrist reachable)
+    'y_min': -145.0,     # mm: right limit
+    'y_max': 145.0,      # mm: left limit
+    'max_radius': 260.0, # mm: maximum reach radius sqrt(x^2 + y^2)
+    'min_radius': 80.0,  # mm: minimum radius around base
     'z_min': 85.0,       # mm: absolute floor limit to protect table surface
     'z_hover': 185.0,    # mm: approach / transit height
     'z_lift': 215.0,     # mm: lift height
@@ -287,7 +287,7 @@ class ColorPickAndPlaceNode(Node):
         time.sleep(0.65)
         return res is not None and res.flag
 
-    def send_coords(self, coords, speed=None, model=1):
+    def send_coords(self, coords, speed=None, model=0):
         if speed is None:
             speed = self.speed
         x, y, z = float(coords[0]), float(coords[1]), float(coords[2])
